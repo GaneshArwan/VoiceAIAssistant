@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
-import { isSafeBaseUrl } from '@/lib/security';
+import { isSafeBaseUrl, validateProviderConfig, sanitizeError } from '@/lib/security';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 const SYSTEM_PROMPT = 'You are a highly responsive, conversational Voice AI assistant. Keep responses very concise, engaging, and directly answer the user without fluff. Optimize for spoken output.';
@@ -12,7 +12,30 @@ export async function POST(req: Request) {
     const rateLimitResponse = checkRateLimit(req, 20, 60000); // 20 requests per minute
     if (rateLimitResponse) return rateLimitResponse;
 
-    const { messages, settings } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+    const { messages, settings } = body;
+
+    if (!settings) {
+      return NextResponse.json({ error: 'Settings not provided' }, { status: 400 });
+    }
+
+    const settingsVal = validateProviderConfig(settings, ['gemini', 'openai', 'anthropic', 'local'], false);
+    if (!settingsVal.isValid) {
+      return NextResponse.json({ error: settingsVal.error }, { status: 400 });
+    }
+
+    if (settings.provider !== 'local') {
+      if (!settings.apiKey || !settings.apiKey.trim()) {
+        return NextResponse.json({ error: `API key is missing for ${settings.provider} LLM` }, { status: 401 });
+      }
+    } else {
+      if (settings.baseURL && !isSafeBaseUrl(settings.baseURL)) {
+        return NextResponse.json({ error: 'Local endpoints are disabled by security policy' }, { status: 403 });
+      }
+    }
 
     if (!messages || !Array.isArray(messages)) {
       return NextResponse.json({ error: 'Invalid messages array' }, { status: 400 });
@@ -21,21 +44,21 @@ export async function POST(req: Request) {
       return NextResponse.json({ error: 'Too many messages in history' }, { status: 400 });
     }
     for (const msg of messages) {
-      if (msg.content && msg.content.length > 4000) {
+      if (!msg || typeof msg !== 'object') {
+        return NextResponse.json({ error: 'Invalid message object' }, { status: 400 });
+      }
+      if (typeof msg.role !== 'string' || !['user', 'assistant', 'system'].includes(msg.role)) {
+        return NextResponse.json({ error: 'Invalid message role' }, { status: 400 });
+      }
+      if (typeof msg.content !== 'string') {
+        return NextResponse.json({ error: 'Message content must be a string' }, { status: 400 });
+      }
+      if (msg.content.length > 4000) {
         return NextResponse.json({ error: 'Message content too long' }, { status: 400 });
       }
     }
-    if (!settings) {
-      return NextResponse.json({ error: 'Settings not provided' }, { status: 400 });
-    }
 
     if (settings.provider === 'openai' || settings.provider === 'local') {
-      if (settings.provider === 'local' && !isSafeBaseUrl(settings.baseURL)) {
-        return NextResponse.json({ error: 'Local endpoints are disabled by security policy' }, { status: 403 });
-      }
-      if (settings.provider === 'openai' && !settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for OpenAI LLM' }, { status: 401 });
-      }
       const openai = new OpenAI({ 
         apiKey: settings.apiKey || 'not-needed',
         baseURL: settings.provider === 'local' ? (settings.baseURL || 'http://localhost:1234/v1') : undefined
@@ -52,9 +75,6 @@ export async function POST(req: Request) {
       });
 
     } else if (settings.provider === 'gemini') {
-      if (!settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for Gemini LLM' }, { status: 401 });
-      }
       const genAI = new GoogleGenerativeAI(settings.apiKey);
       const model = genAI.getGenerativeModel({ 
           model: settings.model || 'gemini-1.5-flash',
@@ -72,7 +92,6 @@ export async function POST(req: Request) {
 
       const lastMessage = messages[messages.length - 1].content;
 
-
       const chat = model.startChat({
           history,
           generationConfig: { temperature: 0.7, maxOutputTokens: 150 }
@@ -85,9 +104,6 @@ export async function POST(req: Request) {
       });
 
     } else if (settings.provider === 'anthropic') {
-      if (!settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for Anthropic LLM' }, { status: 401 });
-      }
       const anthropic = new Anthropic({ apiKey: settings.apiKey });
       
       const formattedMessages = messages.map((msg: { role: string; content: string }) => ({
@@ -116,7 +132,8 @@ export async function POST(req: Request) {
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error generating response';
-    console.error('Chat error:', errorMessage);
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    const sanitizedMsg = sanitizeError(errorMessage);
+    console.error('Chat error:', sanitizedMsg);
+    return NextResponse.json({ error: sanitizedMsg }, { status: 500 });
   }
 }

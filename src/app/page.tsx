@@ -51,6 +51,7 @@ export default function VoiceAssistant() {
       setIsSettingsOpen(true);
       return;
     }
+    if (state !== 'idle') return;
     interrupt(); // abort any ongoing pipeline
     try {
       if (!recorderRef.current) {
@@ -62,10 +63,11 @@ export default function VoiceAssistant() {
       console.error('Failed to start recording:', error);
       alert('Could not access microphone.');
     }
-  }, [appSettings, interrupt]);
+  }, [appSettings, interrupt, state]);
 
   const stopRecording = useCallback(async () => {
     if (!recorderRef.current || !appSettings) return;
+    if (state !== 'listening') return;
 
     setState('thinking');
     thinkingStartTimeRef.current = Date.now();
@@ -85,9 +87,15 @@ export default function VoiceAssistant() {
         body: formData,
         signal: abortController.signal,
       });
-      const { text: userText, error: transcribeError } = await transcribeRes.json();
       
-      if (transcribeError) throw new Error(transcribeError);
+      if (!transcribeRes.ok) {
+        const errorData = await transcribeRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Transcription failed: ${transcribeRes.status}`);
+      }
+      
+      const transcribeData = await transcribeRes.json();
+      const userText = transcribeData.text;
+      
       if (!userText) {
         setState('idle');
         return;
@@ -112,9 +120,14 @@ export default function VoiceAssistant() {
         }),
         signal: abortController.signal,
       });
-      const { text: assistantText, error: chatError } = await chatRes.json();
-      
-      if (chatError) throw new Error(chatError);
+
+      if (!chatRes.ok) {
+        const errorData = await chatRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Chat response failed: ${chatRes.status}`);
+      }
+
+      const chatData = await chatRes.json();
+      const assistantText = chatData.text;
 
       const latency = Date.now() - thinkingStartTimeRef.current;
       const assistantMessage: Message = {
@@ -135,7 +148,10 @@ export default function VoiceAssistant() {
         signal: abortController.signal,
       });
       
-      if (!speakRes.ok) throw new Error('Failed to generate speech');
+      if (!speakRes.ok) {
+        const errorData = await speakRes.json().catch(() => ({}));
+        throw new Error(errorData.error || `Speech generation failed: ${speakRes.status}`);
+      }
       
       const audioBlobOutput = await speakRes.blob();
       
@@ -175,7 +191,8 @@ export default function VoiceAssistant() {
       alert(error instanceof Error ? error.message : 'An error occurred');
       setState('idle');
     }
-  }, [messages, appSettings]);
+  }, [messages, appSettings, state]);
+
 
   return (
     <main className="flex flex-col h-screen bg-slate-50 dark:bg-[#020617] text-slate-900 dark:text-slate-50 font-sans relative overflow-hidden">

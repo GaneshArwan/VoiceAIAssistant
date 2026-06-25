@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import * as googleTTS from 'google-tts-api';
 import OpenAI from 'openai';
-import { isSafeBaseUrl } from '@/lib/security';
+import { isSafeBaseUrl, validateProviderConfig, sanitizeError } from '@/lib/security';
 import { checkRateLimit } from '@/lib/rate-limit';
 
 export async function POST(req: Request) {
@@ -9,9 +9,13 @@ export async function POST(req: Request) {
     const rateLimitResponse = checkRateLimit(req, 20, 60000); // 20 requests per minute
     if (rateLimitResponse) return rateLimitResponse;
 
-    const { text, settings } = await req.json();
+    const body = await req.json().catch(() => null);
+    if (!body || typeof body !== 'object') {
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
+    const { text, settings } = body;
 
-    if (!text) {
+    if (!text || typeof text !== 'string') {
       return NextResponse.json({ error: 'No text provided' }, { status: 400 });
     }
     if (text.length > 4000) {
@@ -19,6 +23,21 @@ export async function POST(req: Request) {
     }
     if (!settings) {
       return NextResponse.json({ error: 'Settings not provided' }, { status: 400 });
+    }
+
+    const settingsVal = validateProviderConfig(settings, ['google', 'gemini', 'openai', 'elevenlabs', 'local'], false);
+    if (!settingsVal.isValid) {
+      return NextResponse.json({ error: settingsVal.error }, { status: 400 });
+    }
+
+    if (settings.provider !== 'google' && settings.provider !== 'local') {
+      if (!settings.apiKey || !settings.apiKey.trim()) {
+        return NextResponse.json({ error: `API key is missing for ${settings.provider} TTS` }, { status: 401 });
+      }
+    } else if (settings.provider === 'local') {
+      if (settings.baseURL && !isSafeBaseUrl(settings.baseURL)) {
+        return NextResponse.json({ error: 'Local endpoints are disabled by security policy' }, { status: 403 });
+      }
     }
 
     if (settings.provider === 'google') {
@@ -40,10 +59,6 @@ export async function POST(req: Request) {
       });
 
     } else if (settings.provider === 'gemini') {
-      if (!settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for Gemini TTS' }, { status: 401 });
-      }
-
       // Use the Cloud Text-to-Speech REST API which supports Gemini-TTS models
       const modelName = settings.model || 'gemini-3.1-flash-tts-preview';
       const endpoint = `https://texttospeech.googleapis.com/v1/text:synthesize?key=${settings.apiKey}`;
@@ -68,9 +83,10 @@ export async function POST(req: Request) {
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
-        console.error('Gemini TTS API Error:', errorData);
-        throw new Error(errorData.error?.message || `Gemini TTS API error: ${response.status}`);
+        const errorData = await response.json().catch(() => ({}));
+        const errMessage = errorData.error?.message || `Gemini TTS API error: ${response.status}`;
+        console.error('Gemini TTS API Error:', sanitizeError(errMessage));
+        throw new Error(errMessage);
       }
 
       const data = await response.json();
@@ -84,13 +100,6 @@ export async function POST(req: Request) {
       });
 
     } else if (settings.provider === 'openai' || settings.provider === 'local') {
-      if (settings.provider === 'local' && !isSafeBaseUrl(settings.baseURL)) {
-        return NextResponse.json({ error: 'Local endpoints are disabled by security policy' }, { status: 403 });
-      }
-      if (settings.provider === 'openai' && !settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for OpenAI TTS' }, { status: 401 });
-      }
-
       const openai = new OpenAI({ 
         apiKey: settings.apiKey || 'not-needed',
         baseURL: settings.provider === 'local' ? (settings.baseURL || 'http://localhost:1234/v1') : undefined
@@ -103,7 +112,7 @@ export async function POST(req: Request) {
         response_format: 'mp3',
       });
 
-      return new NextResponse(mp3.body, {
+      return new NextResponse(mp3.body as any, {
         headers: {
           'Content-Type': 'audio/mpeg',
           'Transfer-Encoding': 'chunked',
@@ -111,10 +120,6 @@ export async function POST(req: Request) {
       });
 
     } else if (settings.provider === 'elevenlabs') {
-      if (!settings.apiKey) {
-        return NextResponse.json({ error: 'API key is missing for ElevenLabs' }, { status: 401 });
-      }
-
       const voiceId = settings.model || '21m00Tcm4TlvDq8ikWAM'; 
       const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${voiceId}`, {
         method: 'POST',
@@ -130,8 +135,9 @@ export async function POST(req: Request) {
       });
 
       if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.detail?.message || 'ElevenLabs API error');
+        const error = await response.json().catch(() => ({}));
+        const errMessage = error.detail?.message || 'ElevenLabs API error';
+        throw new Error(errMessage);
       }
 
       return new NextResponse(response.body, {
@@ -146,7 +152,8 @@ export async function POST(req: Request) {
     }
   } catch (error: unknown) {
     const errorMessage = error instanceof Error ? error.message : 'Error generating audio';
-    console.error('TTS error:', errorMessage);
-    return NextResponse.json({ error: errorMessage }, { status: 500 });
+    const sanitizedMsg = sanitizeError(errorMessage);
+    console.error('TTS error:', sanitizedMsg);
+    return NextResponse.json({ error: sanitizedMsg }, { status: 500 });
   }
 }
