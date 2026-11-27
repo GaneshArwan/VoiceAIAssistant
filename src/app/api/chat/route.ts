@@ -114,13 +114,12 @@ export async function POST(req: Request) {
       const msg = await anthropic.messages.create({
         model: settings.model || 'claude-3-5-sonnet-20241022',
         max_tokens: 150,
-        temperature: 0.7,
         system: SYSTEM_PROMPT,
         messages: formattedMessages
       });
       
-      // @ts-expect-error - Anthropic types are sometimes inconsistent
-      const textResponse = msg.content[0]?.text || '';
+      const firstBlock = msg.content[0];
+      const textResponse = firstBlock?.type === 'text' ? firstBlock.text : '';
 
       return NextResponse.json({
         text: textResponse,
