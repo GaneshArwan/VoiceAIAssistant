@@ -9,7 +9,7 @@
     "lint": "eslint"
   },
   "dependencies": {
-    "@anthropic-ai/sdk": "^0.97.1",
+    "@anthropic-ai/sdk": "^1.13.0",
     "@google/generative-ai": "^0.24.1",
     "axios": "^1.7.4",
     "clsx": "^2.1.1",
