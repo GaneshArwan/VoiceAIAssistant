@@ -7,6 +7,18 @@
 [![Tailwind CSS](https://img.shields.io/badge/Tailwind-4-38B2AC?style=for-the-badge&logo=tailwind-css)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=for-the-badge)](LICENSE)
 
+## Live Demo
+
+![Live Demo](docs/media/demo.gif)
+
+[Watch full MP4 walkthrough](docs/media/demo.mp4)
+
+## Screenshots
+
+| System Core Configuration | Voice Interaction Workspace |
+| :---: | :---: |
+| ![System Core Configuration](docs/media/screenshot-desktop.png) | ![Voice Interaction Workspace](docs/media/screenshot-interactive.png) |
+
 ## Why This Exists
 
 Traditional voice assistants often suffer from high latency, making conversations feel robotic and disjointed. VoiceAI Assistant solves this by implementing an ultra-low latency pipeline (<500ms target) combined with a Bring Your Own Key (BYOK) architecture. It allows developers and users to seamlessly connect multiple AI providers for perception, intelligence, and synthesis without compromising on speed or privacy.
